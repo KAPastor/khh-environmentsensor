@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import pandas as pd
 import json
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Configuration
 BASE_URL = "https://environmentsensor-c9fc0-default-rtdb.firebaseio.com/"
@@ -15,6 +17,17 @@ def fetch_data():
     except requests.RequestException as e:
         st.error(f"Error fetching data from Firebase: {e}")
         return None
+
+def delete_room_data(home, room):
+    """Deletes the room data from Firebase."""
+    try:
+        url = f"{BASE_URL}/{home}/{room}.json"
+        response = requests.delete(url)
+        response.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        st.error(f"Error deleting data: {e}")
+        return False
 
 def main():
     st.set_page_config(page_title="Environment Sensor Dashboard", layout="wide")
@@ -71,17 +84,61 @@ def main():
                 })
 
                 # Tabs for different views
-                tab1, tab2 = st.tabs(["Temperature", "Humidity"])
+                # Create figure with secondary y-axis
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-                with tab1:
-                    st.subheader("Temperature over Time")
-                    st.line_chart(df.set_index("Time")["Temperature"])
+                # Add Temperature trace
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['Time'], 
+                        y=df['Temperature'], 
+                        name="Temperature (°C)",
+                        mode='lines+markers', 
+                        line=dict(color='#FF5733', width=2, shape='spline'),
+                        marker=dict(size=6)
+                    ),
+                    secondary_y=False,
+                )
 
-                with tab2:
-                    st.subheader("Humidity over Time")
-                    st.line_chart(df.set_index("Time")["Humidity"])
+                # Add Humidity trace
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['Time'], 
+                        y=df['Humidity'], 
+                        name="Humidity (%)",
+                        mode='lines+markers', 
+                        line=dict(color='#33C1FF', width=2, shape='spline'),
+                        marker=dict(size=6)
+                    ),
+                    secondary_y=True,
+                )
+
+                # Add figure title and layout updates
+                fig.update_layout(
+                    title_text=f"Environment Data - {selected_room}",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    template="plotly_white",
+                    height=500
+                )
+
+                # Set x-axis title
+                fig.update_xaxes(title_text="Time")
+
+                # Set y-axes titles
+                fig.update_yaxes(title_text="Temperature (°C)", secondary_y=False, title_font=dict(color="#FF5733"))
+                fig.update_yaxes(title_text="Humidity (%)", secondary_y=True, title_font=dict(color="#33C1FF"))
+
+                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No timeseries data available for charts.")
+
+            # Clear Data Button
+            st.divider()
+            if st.button("Clear Room Data", type="primary"):
+                if delete_room_data(selected_home, selected_room):
+                    st.success(f"Cleared data for {selected_room} in {selected_home}!")
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
