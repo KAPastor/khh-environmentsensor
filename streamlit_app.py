@@ -1,151 +1,87 @@
 import streamlit as st
+import requests
 import pandas as pd
-import math
-from pathlib import Path
+import json
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Configuration
+BASE_URL = "https://environmentsensor-c9fc0-default-rtdb.firebaseio.com/"
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+def fetch_data():
+    """Fetches all data from the Firebase Realtime Database."""
+    try:
+        response = requests.get(f"{BASE_URL}.json")
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        st.error(f"Error fetching data from Firebase: {e}")
+        return None
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def main():
+    st.set_page_config(page_title="Environment Sensor Dashboard", layout="wide")
+    st.title("Environment Sensor Dashboard")
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    # Fetch data
+    data = fetch_data()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    if not data:
+        st.warning("No data available.")
+        return
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    # Sidebar: Select Home
+    home_names = list(data.keys())
+    selected_home = st.sidebar.selectbox("Select Home", home_names)
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+    if selected_home:
+        home_data = data[selected_home]
+        
+        # Sidebar: Select Room
+        room_names = list(home_data.keys()) if home_data else []
+        selected_room = st.sidebar.selectbox("Select Room", room_names)
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+        if selected_room:
+            room_data = home_data[selected_room]
 
-    return gdp_df
+            # Display Data
+            st.header(f"{selected_home} - {selected_room}")
 
-gdp_df = get_gdp_data()
+            # Extract lists, handling potential missing keys or empty lists gracefully
+            times = room_data.get("Time", [])
+            temps = room_data.get("Temperature", [])
+            humidities = room_data.get("Humidity", [])
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+            # Metrics
+            col1, col2 = st.columns(2)
+            
+            current_temp = temps[-1] if temps else "N/A"
+            current_humidity = humidities[-1] if humidities else "N/A"
+            
+            col1.metric("Temperature", f"{current_temp} °C")
+            col2.metric("Humidity", f"{current_humidity} %")
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+            # Charts
+            if times:
+                # Create a DataFrame for easier plotting
+                # Ensure all lists are of same length to avoid pandas errors
+                min_len = min(len(times), len(temps), len(humidities))
+                
+                df = pd.DataFrame({
+                    "Time": times[:min_len],
+                    "Temperature": temps[:min_len],
+                    "Humidity": humidities[:min_len]
+                })
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+                # Tabs for different views
+                tab1, tab2 = st.tabs(["Temperature", "Humidity"])
 
-# Add some spacing
-''
-''
+                with tab1:
+                    st.subheader("Temperature over Time")
+                    st.line_chart(df.set_index("Time")["Temperature"])
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+                with tab2:
+                    st.subheader("Humidity over Time")
+                    st.line_chart(df.set_index("Time")["Humidity"])
+            else:
+                st.info("No timeseries data available for charts.")
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+if __name__ == "__main__":
+    main()
